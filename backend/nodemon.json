@@ -1,0 +1,5 @@
+{
+  "watch": ["src"],
+  "ignore": ["tmp-builds", "node_modules"],
+  "ext": "js,json"
+}
