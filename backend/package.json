@@ -27,6 +27,7 @@
     "passport": "^0.7.0",
     "passport-github2": "^0.1.12",
     "prisma": "^6.19.0",
-    "simple-git": "^3.30.0"
+    "simple-git": "^3.30.0",
+    "socket.io": "^4.8.1"
   }
 }
