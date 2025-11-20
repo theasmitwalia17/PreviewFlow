@@ -1,12 +1,12 @@
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
-import AuthSuccess from "./pages/AuthSuccess.jsx";
 import ConnectRepo from "./pages/ConnectRepo.jsx";
+import AuthSuccess from "./pages/AuthSuccess.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Logs from "./pages/Logs.jsx";
 
-export default function App() {
+const App = () => {
   const token = localStorage.getItem("token");
 
   const LoginPage = () => (
@@ -24,28 +24,36 @@ export default function App() {
     <BrowserRouter>
       <Routes>
 
-        {/* OAuth callback */}
+        {/* OAuth redirect page */}
         <Route path="/auth/success" element={<AuthSuccess />} />
 
-        {/* Dashboard (home) */}
+        {/* Dashboard (Homepage) */}
         <Route
           path="/"
-          element={token ? <Dashboard /> : <LoginPage />}
+          element={
+            token ? <Dashboard /> : <LoginPage />
+          }
         />
 
-        {/* Connect repo */}
+        {/* Connect repo page */}
         <Route
           path="/connect"
-          element={token ? <ConnectRepo /> : <Navigate to="/" />}
+          element={
+            token ? <ConnectRepo /> : <Navigate to="/" />
+          }
         />
 
-        {/* Live Logs */}
+        {/* Logs page */}
         <Route
           path="/logs/:id"
-          element={token ? <Logs /> : <Navigate to="/" />}
+          element={
+            token ? <Logs /> : <Navigate to="/" />
+          }
         />
 
       </Routes>
     </BrowserRouter>
   );
-}
+};
+
+export default App;
