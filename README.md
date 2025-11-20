@@ -249,4 +249,12 @@ pr-review/
 
 ## License
 
-This project is licensed under the MIT License – see [`LICENSE.txt`](LICENSE.txt).
+This project is licensed under a **custom non‑commercial license** – see [`LICENSE.txt`](LICENSE.txt) for full terms.
+
+In summary:
+
+- Free to use for personal, hobby, educational, research, or internal non‑commercial purposes.
+- Any commercial or revenue‑generating use requires prior written permission and a separate license agreement from the copyright holder.
+- Any production use must include clear attribution:  
+  “This project includes software created by Abhijat Sinha.”
+- Redistribution must include this license text and copyright notice.
