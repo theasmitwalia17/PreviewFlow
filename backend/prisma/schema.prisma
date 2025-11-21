@@ -35,6 +35,8 @@ model Preview {
   url       String?
   buildLogs String?
   containerName String?
+  buildStartedAt   DateTime?
+  buildCompletedAt DateTime?
 
   @@unique([projectId, prNumber])
 }
