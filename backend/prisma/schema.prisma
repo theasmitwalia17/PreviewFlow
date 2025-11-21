@@ -27,14 +27,16 @@ model Project {
 }
 
 model Preview {
-  id        String   @id @default(cuid())
-  projectId String
-  project   Project  @relation("ProjectPreviews", fields: [projectId], references: [id])
-  prNumber  Int
-  status    String
-  url       String?
-  buildLogs String?
-  containerName String?
+  id               String   @id @default(cuid())
+  projectId        String
+  project          Project  @relation("ProjectPreviews", fields: [projectId], references: [id])
+  prNumber         Int
+  status           String
+  url              String?
+  buildLogs        String?
+  containerName    String?
+  port             Int?     // <-- newly added
+  buildNumber      Int      @default(1) // <-- newly added
   buildStartedAt   DateTime?
   buildCompletedAt DateTime?
 
