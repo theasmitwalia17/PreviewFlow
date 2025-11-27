@@ -86,8 +86,15 @@ export async function handlePRClosed({ project, prNumber }) {
 
   await prisma.preview.update({
     where: { id: preview.id },
-    data: { status: "deleted", url: null, port: null }
-  });
+    data: {
+      status: "deleted",
+      url: null,
+      containerName: null,
+      port: null,
+      buildStartedAt: null,
+      buildCompletedAt: null
+  }
+});
 
   getIO().emit("preview-status-update", {
     projectId: project.id,
