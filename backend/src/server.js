@@ -1,79 +1,96 @@
 import express from "express";
 import http from "http";
-import session from "express-session";
-import bodyParser from "body-parser";
 import cors from "cors";
 import passport from "./auth.js";
 import jwt from "jsonwebtoken";
-import morgan from "morgan";
+import bodyParser from "body-parser";
 import dotenv from "dotenv";
-dotenv.config();
+import morgan from "morgan";
+import { prisma } from "./db.js";
+import { initSocket } from "./socket.js";
 
 import githubRepos from "./routes/githubRepos.js";
 import connectRepo from "./routes/connectRepo.js";
 import createWebhook from "./routes/createWebhook.js";
 import githubWebhook from "./routes/githubWebhook.js";
-import devSim from "./routes/devSimulate.js";
-import projectDashboard from "./routes/projectDashboard.js";
 import previewActions from "./routes/previewActions.js";
+import projectDashboard from "./routes/projectDashboard.js";
 import logsRoute from "./routes/logs.js";
+import devSim from "./routes/devSimulate.js";
 
-import { initSocket } from "./socket.js";
+dotenv.config();
 
 const app = express();
+const server = http.createServer(app);
 
-// CORS and logging
-app.use(cors({ origin: "http://localhost:5173", credentials: true }));
+// --- ✅ CORS & JSON ---
+app.use(cors({ origin: "*", allowedHeaders: "*", credentials: true }));
+app.use(express.json());
+
+// --- ✅ Logger ---
+app.use(morgan("dev"));
+app.use(cors({ origin: "*", allowedHeaders: "*" }));
 app.use(morgan("dev"));
 
-// IMPORTANT: Use raw-body parser first (for webhook signature verification)
-app.use(bodyParser.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
-}));
+// --- ✅ Raw body (for GitHub webhook signature verify) ---
+app.use(
+  bodyParser.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf.toString("utf8");
+    },
+  })
+);
 
-// Session & passport
-app.use(session({
-  secret: process.env.JWT_SECRET,
-  resave: false,
-  saveUninitialized: false
-}));
-app.use(passport.initialize());
-app.use(passport.session());
-
-// Auth routes
+// --- ✅ GitHub OAuth (NO session mode needed because you're using JWT) ---
 app.get("/auth/github", passport.authenticate("github"));
-app.get("/auth/github/callback",
-  passport.authenticate("github", { failureRedirect: "/" }),
-  (req, res) => {
-    const token = jwt.sign({
-      userId: req.user.id,
-      accessToken: req.user.accessToken
-    }, process.env.JWT_SECRET);
 
-    res.redirect(`http://localhost:5173/auth/success?token=${token}`);
+app.get(
+  "/auth/github/callback",
+  passport.authenticate("github", { session: false, failureRedirect: "/" }),
+  async (req, res) => {
+    try {
+      const user = req.user;
+      const freshUser = await prisma.user.findUnique({ where: { id: user.id }});
+
+      const token = jwt.sign(
+        {
+          userId: freshUser.id,
+          accessToken: req.user.accessToken,
+          tier: freshUser.tier, // ✅ embed latest DB tier
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      return res.redirect(`http://localhost:5173/auth/success?token=${token}`);
+    } catch (err) {
+      console.error(err);
+      return res.status(500).send("auth_failed");
+    }
   }
 );
 
-// API & webhook routes
+// --- ✅ API Routes (mount at root paths they expect) ---
 app.use("/api", githubRepos);
 app.use("/api", connectRepo);
 app.use("/api", createWebhook);
+app.use("/api", previewActions);
 app.use("/api", projectDashboard);
 app.use("/api", logsRoute);
-app.use("/api", previewActions);
 
-// webhook route (must accept raw body)
+// --- ✅ GitHub webhook receiver ---
 app.use("/", githubWebhook);
 
-// dev-sim
-app.use("/", devSim);
+// --- ✅ Dev simulation (must come LAST so it doesn't steal routes) ---
+app.use("/dev/simulate", devSim);
 
-// create HTTP server & attach socket.io
-const server = http.createServer(app);
+// --- ✅ Init WebSockets properly ---
 initSocket(server);
 
-// start server
+// --- ✅ Start server ---
 const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => console.log(`Backend running at http://localhost:${PORT}`));
+server.listen(PORT, () => {
+  console.log(`Backend running on http://localhost:${PORT}`);
+});
+
+export default app;
