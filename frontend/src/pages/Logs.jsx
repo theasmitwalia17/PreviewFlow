@@ -2,37 +2,63 @@ import React, { useEffect, useRef, useState, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { io } from "socket.io-client";
-import { X, Copy, Loader2, ArrowDownCircle } from "lucide-react";
+import { X, Copy, Loader2, ArrowDownCircle, Lock } from "lucide-react";
+
+const getUserTier = (token) => {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return (payload.tier || 'FREE').toUpperCase();
+  } catch { return 'FREE'; }
+};
+
+const ALLOW_SOCKET_TIERS = ['PRO', 'ENTERPRISE'];
+
+// --- VISUAL HELPERS ---
 
 /**
- * Visual Highlighting Logic
+ * FIXED: XSS Vulnerability
+ * - Previous: part.includes("http") -> Vulnerable to "javascript:alert('http')"
+ * - Current: Strict check for http:// or https:// at start of string
  */
 const highlightKeywords = (text) => {
-  if(!text) return "";
-  const parts = text.split(/(\s+)/); 
+  if (!text) return "";
+  const parts = text.split(/(\s+)/);
   return parts.map((part, i) => {
+    // Timings
     if (part.match(/^[0-9.]+s$/)) return <span key={i} className="text-yellow-400 font-bold">{part}</span>;
-    if (part.includes("http")) return <a key={i} href={part} target="_blank" rel="noreferrer" className="text-blue-400 underline decoration-blue-400/30 hover:text-blue-300">{part}</a>;
+    
+    // URLs - Strict Security Check
+    if (part.startsWith("http://") || part.startsWith("https://")) {
+      return (
+        <a 
+          key={i} 
+          href={part} 
+          target="_blank" 
+          rel="noopener noreferrer" // Security best practice
+          className="text-blue-400 underline decoration-blue-400/30 hover:text-blue-300"
+        >
+          {part}
+        </a>
+      );
+    }
+
+    // Keywords
     if (part === "npm") return <span key={i} className="text-red-400 font-semibold">{part}</span>;
     if (["install", "run", "build", "dev"].includes(part)) return <span key={i} className="text-cyan-400">{part}</span>;
     if (part.startsWith("sha256:")) return <span key={i} className="text-purple-400">{part.substring(0, 12)}...</span>;
+    
     return part;
   });
 };
 
-/**
- * Visual Line Parsing
- */
 const parseLogLine = (line, index) => {
   const cleanLine = line ? line.replace(/\r/g, "").trimEnd() : "";
   if (!cleanLine) return null;
 
-  // Headers
   if (cleanLine.startsWith("===") || cleanLine.includes("BUILD FINISHED")) {
     return <div key={index} className="py-4 mt-2 font-bold text-emerald-400 border-t border-white/10 tracking-wider">{cleanLine}</div>;
   }
 
-  // Docker Steps
   if (cleanLine.trim().startsWith("#")) {
     const stepMatch = cleanLine.match(/^(#\d+)\s+(.*)/);
     if (stepMatch) {
@@ -45,7 +71,6 @@ const parseLogLine = (line, index) => {
     }
   }
 
-  // Errors
   if (cleanLine.toLowerCase().includes("error") || cleanLine.toLowerCase().includes("failed")) {
     return (
       <div key={index} className="flex border-l-[3px] border-red-500 bg-red-500/5 pl-4 py-1">
@@ -54,17 +79,15 @@ const parseLogLine = (line, index) => {
     );
   }
 
-  // Success
   if (cleanLine.includes("DONE") || cleanLine.includes("success")) {
     return (
-        <div key={index} className="flex gap-3 text-emerald-400 font-medium py-1">
-             <span className="text-blue-500 font-bold min-w-[35px] shrink-0 opacity-50">✓</span>
-             <span className="break-all whitespace-pre-wrap">{cleanLine}</span>
-        </div>
+      <div key={index} className="flex gap-3 text-emerald-400 font-medium py-1">
+        <span className="text-blue-500 font-bold min-w-[35px] shrink-0 opacity-50">✓</span>
+        <span className="break-all whitespace-pre-wrap">{cleanLine}</span>
+      </div>
     )
   }
 
-  // Default Line
   return <div key={index} className="text-gray-400 break-all whitespace-pre-wrap py-[1px] pl-[47px] hover:text-gray-200 transition-colors">{highlightKeywords(cleanLine)}</div>;
 };
 
@@ -76,36 +99,90 @@ export default function Logs({ previewId, onClose }) {
   const [logs, setLogs] = useState("");
   const [status, setStatus] = useState("loading");
   const [autoScroll, setAutoScroll] = useState(true);
+  const [userTier, setUserTier] = useState("FREE");
+  const [error, setError] = useState(null); // Local error boundary state
   
   const socketRef = useRef(null);
+  const isMounted = useRef(true); // Track mount state
   const token = localStorage.getItem("token");
   const navigate = useNavigate();
   const logContainerRef = useRef(null);
 
+  // Track mount status to prevent memory leaks
+  useEffect(() => {
+    isMounted.current = true;
+    return () => { isMounted.current = false; };
+  }, []);
+
+  // --- API LOGS FETCHING ---
   useEffect(() => {
     if (!token) { if (!isEmbedded) navigate("/"); return; }
+    
+    const tier = getUserTier(token);
+    if(isMounted.current) setUserTier(tier);
+
+    // FIXED: Race Condition using AbortController
+    const controller = new AbortController();
+
     setLogs(""); 
     setStatus("loading");
-    axios.get(`http://localhost:4000/api/preview/${id}/logs`, { headers: { Authorization: `Bearer ${token}` }})
+    setError(null);
+
+    axios.get(`http://localhost:4000/api/preview/${id}/logs`, { 
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal // Bind signal
+    })
       .then((res) => { 
-        setLogs((res.data.logs || "").replace(/\r/g, "")); 
-        setStatus("ready"); 
+        if (isMounted.current) {
+          setLogs((res.data.logs || "").replace(/\r/g, "")); 
+          setStatus("ready"); 
+        }
       })
-      .catch((err) => { console.error(err); setLogs((prev) => prev + "\n[Error fetching saved logs]"); setStatus("ready"); });
+      .catch((err) => { 
+        if (axios.isCancel(err)) return; // Ignore cancelled requests
+        console.error(err); 
+        if (isMounted.current) {
+          setLogs((prev) => prev + "\n[Error fetching saved logs]"); 
+          setStatus("ready"); 
+        }
+      });
+
+    return () => {
+      controller.abort(); // Cancel request on cleanup
+    };
   }, [id, token, navigate, isEmbedded]);
 
+  // --- SOCKET CONNECTION ---
   useEffect(() => {
     if (!token) return;
+    
+    const tier = getUserTier(token);
+    if (!ALLOW_SOCKET_TIERS.includes(tier)) {
+      return; 
+    }
+
     const socket = io("http://localhost:4000", { transports: ["websocket"], withCredentials: true });
     socketRef.current = socket;
+
     socket.on("connect", () => socket.emit("register", { previewId: id, token }));
+    
     socket.on("log", ({ chunk }) => { 
+        if (!isMounted.current) return;
         setLogs((prev) => prev + chunk.replace(/\r/g, "")); 
         if(autoScroll) scrollToBottom(); 
     });
-    socket.on("log-finish", ({ url }) => setLogs((prev) => prev + `\n\n=== BUILD FINISHED: ${url} ===\n`));
-    socket.on("log-error", ({ message }) => setLogs((prev) => prev + `\n\n=== BUILD ERROR: ${message} ===\n`));
-    return () => socket.disconnect();
+    
+    socket.on("log-finish", ({ url }) => {
+       if(isMounted.current) setLogs((prev) => prev + `\n\n=== BUILD FINISHED: ${url} ===\n`);
+    });
+    
+    socket.on("log-error", ({ message }) => {
+       if(isMounted.current) setLogs((prev) => prev + `\n\n=== BUILD ERROR: ${message} ===\n`);
+    });
+
+    return () => {
+      socket.disconnect(); // Clean up socket connection
+    };
   }, [id, token, autoScroll]);
 
   const scrollToBottom = () => { if (logContainerRef.current) logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight; };
@@ -117,13 +194,23 @@ export default function Logs({ previewId, onClose }) {
       setAutoScroll(isAtBottom);
   }
 
-  const logLines = useMemo(() => logs.split("\n").map((line, index) => parseLogLine(line, index)), [logs]);
+  // FIXED: Error Boundary Logic inside useMemo
+  const logLines = useMemo(() => {
+    try {
+      return logs.split("\n").map((line, index) => parseLogLine(line, index));
+    } catch (e) {
+      console.error("Log Parsing Error:", e);
+      return <div className="text-red-500 p-4">Error parsing logs. Raw output unavailable.</div>;
+    }
+  }, [logs]);
+
   const copyLogs = () => navigator.clipboard.writeText(logs);
+
+  if (error) return <div className="text-red-500 p-6">Failed to load logs component.</div>;
 
   return (
     <div className={`flex flex-col h-full bg-[#09090b] text-gray-300 font-mono text-[13px] ${isEmbedded ? '' : 'min-h-screen'}`}>
       
-      {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-[#09090b]/80 backdrop-blur-md sticky top-0 z-20 transition-all">
         <div className="flex items-center gap-4">
             <div className={`w-2.5 h-2.5 rounded-full shadow-[0_0_10px_rgba(234,179,8,0.4)] ${status === 'loading' ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500 shadow-[0_0_10px_rgba(34,197,94,0.4)]'}`} />
@@ -131,6 +218,11 @@ export default function Logs({ previewId, onClose }) {
                 <h2 className="text-white font-semibold tracking-tight text-sm">Build Logs</h2>
                 <div className="flex items-center gap-2 text-[11px] text-gray-500 font-mono mt-0.5">
                    <span>ID:</span><span className="bg-white/10 px-1.5 py-0.5 rounded text-gray-300">{id?.slice(0, 8)}</span>
+                   {!ALLOW_SOCKET_TIERS.includes(userTier) && (
+                     <span className="flex items-center gap-1 text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded ml-2 border border-amber-500/20">
+                       <Lock size={10} /> Live logs locked
+                     </span>
+                   )}
                 </div>
             </div>
         </div>
@@ -146,7 +238,6 @@ export default function Logs({ previewId, onClose }) {
         </div>
       </div>
 
-      {/* Log Body */}
       <div ref={logContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden p-6 custom-scrollbar scroll-smooth">
         {status === "loading" && !logs ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-3">
@@ -160,12 +251,7 @@ export default function Logs({ previewId, onClose }) {
           </div>
         )}
       </div>
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #333; border-radius: 20px; border: 1px solid #09090b; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #555; }
-      `}</style>
+      <style>{`.custom-scrollbar::-webkit-scrollbar { width: 6px; } .custom-scrollbar::-webkit-scrollbar-track { background: transparent; } .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #333; border-radius: 20px; border: 1px solid #09090b; } .custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #555; }`}</style>
     </div>
   );
 }
