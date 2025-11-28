@@ -1,20 +1,28 @@
 import express from "express";
-import jwt from "jsonwebtoken";
 import axios from "axios";
 import { prisma } from "../db.js";
+import { requireSubscription } from "../middleware/subscription.js";
 
 const router = express.Router();
 
-router.post("/create-webhook", async (req, res) => {
+router.post("/create-webhook", requireSubscription, async (req, res) => {
   try {
-    const auth = req.headers.authorization?.split(" ")[1];
-    if (!auth) return res.status(401).json({ error: "Missing token" });
-
-    const { accessToken } = jwt.verify(auth, process.env.JWT_SECRET);
+    const { tier, userId, accessToken } = req.sub;
     const { projectId } = req.body;
 
-    const project = await prisma.project.findUnique({ where: { id: projectId } });
-    if (!project) return res.status(404).json({ error: "Project not found" });
+    if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+    if (tier !== "PRO" && tier !== "ENTERPRISE") {
+      return res.status(403).json({
+        error: "Tier " + tier + " is not allowed to create webhooks (requires PRO or ENTERPRISE)",
+        tier
+      });
+    }
+
+    const project = await prisma.project.findFirst({
+      where: { id: projectId, userId }
+    });
+    if (!project) return res.status(404).json({ error: "Project not found or not yours" });
 
     const webhookUrl = `${process.env.PUBLIC_WEBHOOK_URL}/webhooks/github`;
 
@@ -35,10 +43,11 @@ router.post("/create-webhook", async (req, res) => {
       }
     );
 
-    res.json({ success: true, webhookUrl });
+    return res.json({ success: true, webhookUrl });
+
   } catch (err) {
-    console.log(err.response?.data || err);
-    res.status(500).json({ error: "Failed to create webhook" });
+    console.error(err.response?.data || err);
+    return res.status(500).json({ error: "Failed to create webhook" });
   }
 });
 
