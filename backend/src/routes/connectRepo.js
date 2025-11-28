@@ -1,30 +1,36 @@
 import express from "express";
-import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { prisma } from "../db.js";
+import { requireSubscription, assertRepoQuota } from "../middleware/subscription.js";
 
 const router = express.Router();
 
 // POST /api/connect-repo
-router.post("/connect-repo", async (req, res) => {
+router.post("/connect-repo", requireSubscription, async (req, res) => {
   try {
-    const auth = req.headers.authorization?.split(" ")[1];
-    if (!auth) return res.status(401).json({ error: "Missing token" });
-
-    const { userId } = jwt.verify(auth, process.env.JWT_SECRET);
-
+    const { user } = req.sub;
     const { repoOwner, repoName } = req.body;
 
-    // Generate webhook secret (used later when webhook arrives)
+    if (!repoOwner || !repoName) {
+      return res.status(400).json({ error: "Missing repoOwner or repoName" });
+    }
+
+    // enforce tier quota for repos
+    try {
+      await assertRepoQuota(user);
+    } catch (e) {
+      return res.status(403).json({ error: e.message, code: e.code });
+    }
+
+    // generate secret to verify webhooks
     const webhookSecret = crypto.randomBytes(32).toString("hex");
 
-    // Save project to DB
     const project = await prisma.project.create({
       data: {
-        userId,
+        userId: user.id,
         repoOwner,
         repoName,
-        webhookSecret,
+        webhookSecret
       }
     });
 
@@ -32,7 +38,7 @@ router.post("/connect-repo", async (req, res) => {
 
   } catch (err) {
     console.log(err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
