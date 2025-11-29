@@ -23,16 +23,16 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
-// --- ✅ CORS & JSON ---
-app.use(cors({ origin: "*", allowedHeaders: "*", credentials: true }));
-app.use(express.json());
+app.use(
+  cors({
+    origin: "http://localhost:5173",
+    credentials: true,
+  })
+);
 
-// --- ✅ Logger ---
-app.use(morgan("dev"));
-app.use(cors({ origin: "*", allowedHeaders: "*" }));
 app.use(morgan("dev"));
 
-// --- ✅ Raw body (for GitHub webhook signature verify) ---
+// Raw-body JSON parser for GitHub webhook HMAC verification
 app.use(
   bodyParser.json({
     verify: (req, res, buf) => {
@@ -41,7 +41,9 @@ app.use(
   })
 );
 
-// --- ✅ GitHub OAuth (NO session mode needed because you're using JWT) ---
+app.use(passport.initialize());
+
+
 app.get("/auth/github", passport.authenticate("github"));
 
 app.get(
@@ -50,44 +52,51 @@ app.get(
   async (req, res) => {
     try {
       const user = req.user;
-      const freshUser = await prisma.user.findUnique({ where: { id: user.id }});
+
+      const freshUser = await prisma.user.findUnique({
+        where: { id: user.id },
+      });
+
+      if (!freshUser) {
+        return res.status(401).send("user_not_found");
+      }
 
       const token = jwt.sign(
         {
           userId: freshUser.id,
-          accessToken: req.user.accessToken,
-          tier: freshUser.tier, // ✅ embed latest DB tier
+          accessToken: user.accessToken, 
+          tier: freshUser.tier,          
         },
         process.env.JWT_SECRET,
         { expiresIn: "7d" }
       );
 
-      return res.redirect(`http://localhost:5173/auth/success?token=${token}`);
+      return res.redirect(
+        `http://localhost:5173/auth/success?token=${token}`
+      );
     } catch (err) {
-      console.error(err);
+      console.error("OAuth callback error:", err);
       return res.status(500).send("auth_failed");
     }
   }
 );
 
-// --- ✅ API Routes (mount at root paths they expect) ---
-app.use("/api", githubRepos);
-app.use("/api", connectRepo);
-app.use("/api", createWebhook);
-app.use("/api", previewActions);
-app.use("/api", projectDashboard);
-app.use("/api", logsRoute);
 
-// --- ✅ GitHub webhook receiver ---
+app.use("/api", githubRepos);        
+app.use("/api", connectRepo);       
+app.use("/api", createWebhook);     
+app.use("/api", previewActions);    
+app.use("/api", projectDashboard);  
+app.use("/api", logsRoute);         
+
 app.use("/", githubWebhook);
 
-// --- ✅ Dev simulation (must come LAST so it doesn't steal routes) ---
-app.use("/dev/simulate", devSim);
+app.use("/", devSim);
 
-// --- ✅ Init WebSockets properly ---
+
 initSocket(server);
 
-// --- ✅ Start server ---
+
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
   console.log(`Backend running on http://localhost:${PORT}`);
