@@ -1,4 +1,3 @@
-// backend/src/routes/previewActions.js
 import express from "express";
 import jwt from "jsonwebtoken";
 import { prisma } from "../db.js";
@@ -9,130 +8,170 @@ import fs from "fs";
 
 const router = express.Router();
 
-// simple auth middleware (expects Authorization: Bearer <jwt>)
+// ✅ AUTH middleware
 function auth(req, res, next) {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "Missing token" });
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.split(" ")[1] : null;
+  if (!token) return res.status(401).json({ error: "missing_jwt" });
 
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    req.auth = { userId: payload.userId, accessToken: payload.accessToken };
     next();
   } catch (e) {
-    return res.status(401).json({ error: "Invalid token" });
+    return res.status(401).json({ error: "invalid_jwt" });
   }
 }
 
-/**
- * POST /api/preview/:id/rebuild
- * Rebuilds the preview (stops old container, builds again)
- */
+// ✅ REBUILD PREVIEW
 router.post("/preview/:id/rebuild", auth, async (req, res) => {
   try {
     const preview = await prisma.preview.findUnique({
       where: { id: req.params.id },
       include: { project: true }
     });
-    if (!preview) return res.status(404).json({ error: "Preview not found" });
-    if (preview.project.userId !== req.user.userId) return res.status(403).json({ error: "Not allowed" });
 
-    // Stop previous container
+    if (!preview) return res.status(404).json({ error: "preview_not_found" });
+    if (preview.project.userId !== req.auth.userId) return res.status(403).json({ error: "forbidden" });
+
+    // ✅ Stop old container if exists
     if (preview.containerName) {
       await removeContainer(preview.containerName);
     }
 
-    // Immediately mark building and emit
+    // ✅ Update DB → building
     await prisma.preview.update({
       where: { id: preview.id },
-      data: { status: "building", url: null, buildStartedAt: new Date(), buildCompletedAt: null }
+      data: {
+        status: "building",
+        url: null,
+        buildStartedAt: new Date(),
+        buildCompletedAt: null,
+        containerName: null
+      }
     });
 
-    getIO().emit("preview-status-update", { previewId: preview.id, projectId: preview.projectId, prNumber: preview.prNumber, status: "building", url: null });
+    // ✅ Emit update to UI
+    getIO().emit("preview-status-update", {
+      projectId: preview.projectId,
+      prNumber: preview.prNumber,
+      status: "building",
+      url: null,
+      containerName: null,
+      buildStartedAt: new Date()
+    });
 
-    // Clone repo and build
-    const repoPath = await cloneRepo({ repoOwner: preview.project.repoOwner, repoName: preview.project.repoName });
+    // ✅ Clone repo & start build
+    const repoPath = await cloneRepo({
+      repoOwner: preview.project.repoOwner,
+      repoName: preview.project.repoName
+    });
 
     try {
-      const url = await buildPreview({ project: preview.project, previewId: preview.id, repoPath, prNumber: preview.prNumber });
+      const url = await buildPreview({
+        project: preview.project,
+        previewId: preview.id,
+        repoPath,
+        prNumber: preview.prNumber
+      });
 
-      // cleanup
-      try { fs.rmSync(repoPath, { recursive: true, force: true }); } catch (e) {}
+      // ✅ Cleanup cloned folder safely
+      try { fs.rmSync(repoPath, { recursive: true, force: true }); } catch {}
 
-      // Emit full preview update (read DB in handler)
-      // use prHandlers.handlePROpenOrSync flow would also emit; but we emit final snapshot here
-      const updated = await prisma.preview.findUnique({ where: { id: preview.id } });
+      // ✅ Fetch final state and emit again
+      const updated = await prisma.preview.findUnique({ where: { id: preview.id }});
+
       getIO().emit("preview-status-update", {
-        previewId: updated.id,
         projectId: updated.projectId,
         prNumber: updated.prNumber,
         status: updated.status,
         url: updated.url,
+        containerName: updated.containerName,
         buildStartedAt: updated.buildStartedAt,
-        buildCompletedAt: updated.buildCompletedAt,
-        containerName: updated.containerName
+        buildCompletedAt: updated.buildCompletedAt
       });
 
       return res.json({ ok: true, url });
-    } catch (err) {
-      // Build failed: ensure DB status=error and emit
-      await prisma.preview.update({ where: { id: preview.id }, data: { status: "error", buildCompletedAt: new Date(), url: null, containerName: null } });
 
-      const updated = await prisma.preview.findUnique({ where: { id: preview.id } });
+    } catch (err) {
+      // ✅ Build failed → mark error in DB
+      await prisma.preview.update({
+        where: { id: preview.id },
+        data: {
+          status: "error",
+          url: null,
+          containerName: null,
+          buildCompletedAt: new Date()
+        }
+      });
+
+      const updated = await prisma.preview.findUnique({ where: { id: preview.id }});
+
       getIO().emit("preview-status-update", {
-        previewId: updated.id,
         projectId: updated.projectId,
         prNumber: updated.prNumber,
         status: updated.status,
-        url: updated.url,
+        url: null,
+        containerName: null,
         buildStartedAt: updated.buildStartedAt,
-        buildCompletedAt: updated.buildCompletedAt,
-        containerName: updated.containerName
+        buildCompletedAt: updated.buildCompletedAt
       });
 
-      try { fs.rmSync(repoPath, { recursive: true, force: true }); } catch (e) {}
+      try { fs.rmSync(repoPath, { recursive: true, force: true }); } catch {}
 
-      return res.status(500).json({ ok: false, error: "Build failed" });
+      return res.status(500).json({ ok: false, error: "build_failed" });
     }
+
   } catch (err) {
-    console.error("rebuild error:", err);
-    return res.status(500).json({ error: "Unexpected error" });
+    console.error("rebuild_unexpected:", err);
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
-/**
- * POST /api/preview/:id/delete
- * Delete preview (stop container + update DB + emit)
- */
+// ✅ DELETE PREVIEW
 router.post("/preview/:id/delete", auth, async (req, res) => {
   try {
     const preview = await prisma.preview.findUnique({
       where: { id: req.params.id },
       include: { project: true }
     });
-    if (!preview) return res.status(404).json({ error: "Preview not found" });
-    if (preview.project.userId !== req.user.userId) return res.status(403).json({ error: "Not allowed" });
 
+    if (!preview) return res.status(404).json({ error: "preview_not_found" });
+    if (preview.project.userId !== req.auth.userId) return res.status(403).json({ error: "forbidden" });
+
+    // ✅ Stop container if running
     if (preview.containerName) {
       await removeContainer(preview.containerName);
     }
 
-    await prisma.preview.update({ where: { id: preview.id }, data: { status: "deleted", url: null, containerName: null, buildCompletedAt: new Date() } });
+    // ✅ Update DB → deleted
+    await prisma.preview.update({
+      where: { id: preview.id },
+      data: {
+        status: "deleted",
+        url: null,
+        containerName: null,
+        port: null,
+        buildCompletedAt: new Date()
+      }
+    });
 
-    const updated = await prisma.preview.findUnique({ where: { id: preview.id } });
+    const updated = await prisma.preview.findUnique({ where: { id: preview.id }});
+
+    // ✅ Emit final delete update to UI
     getIO().emit("preview-status-update", {
-      previewId: updated.id,
       projectId: updated.projectId,
       prNumber: updated.prNumber,
       status: updated.status,
-      url: updated.url,
-      buildStartedAt: updated.buildStartedAt,
-      buildCompletedAt: updated.buildCompletedAt,
-      containerName: updated.containerName
+      url: null,
+      containerName: null,
+      buildCompletedAt: updated.buildCompletedAt
     });
 
     return res.json({ ok: true });
   } catch (err) {
-    console.error("delete preview error:", err);
-    return res.status(500).json({ error: "Delete failed" });
+    console.error("delete_unexpected:", err);
+    return res.status(500).json({ ok: false, error: "delete_failed" });
   }
 });
 
