@@ -1,20 +1,26 @@
-export const tierRepoLimits = {
-  FREE: 1,
-  HOBBY: 2,
-  PRO: 10,
-  ENTERPRISE: null
+export const TIER_LIMITS = {
+  FREE: {
+    maxProjects: 1,
+    maxConcurrentBuilds: 1,
+    allowWebhooks: false,
+  },
+  HOBBY: {
+    maxProjects: 2,
+    maxConcurrentBuilds: 1,
+    allowWebhooks: false,
+  },
+  PRO: {
+    maxProjects: Infinity,
+    maxConcurrentBuilds: 3,
+    allowWebhooks: true,
+  },
+  ENTERPRISE: {
+    maxProjects: Infinity,
+    maxConcurrentBuilds: 10,
+    allowWebhooks: true,
+  },
 };
 
-export const tierPreviewLimits = {
-  FREE: 1,
-  HOBBY: 3,
-  PRO: 10,
-  ENTERPRISE: null
-};
-
-export const tierPortPools = {
-  FREE: { min: 5500, max: 5700, exclusive: false },
-  HOBBY: { min: 5500, max: 5750, exclusive: false },
-  PRO: { min: 5000, max: 5400, exclusive: true },
-  ENTERPRISE: { min: 4001, max: 4800, exclusive: true }
-};
+export function getTierLimits(tier) {
+  return TIER_LIMITS[tier] || TIER_LIMITS.FREE;
+}
