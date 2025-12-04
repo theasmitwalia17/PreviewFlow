@@ -16,7 +16,8 @@ import githubWebhook from "./routes/githubWebhook.js";
 import previewActions from "./routes/previewActions.js";
 import projectDashboard from "./routes/projectDashboard.js";
 import logsRoute from "./routes/logs.js";
-import devSim from "./routes/devSimulate.js";
+import userRoute from "./routes/user.js";
+import devSim from "./routes/devSimulate.js"; // Development simulation routes
 
 dotenv.config();
 
@@ -87,7 +88,8 @@ app.use("/api", connectRepo);
 app.use("/api", createWebhook);     
 app.use("/api", previewActions);    
 app.use("/api", projectDashboard);  
-app.use("/api", logsRoute);         
+app.use("/api", logsRoute);     
+app.use("/api/user", userRoute);    
 
 app.use("/", githubWebhook);
 

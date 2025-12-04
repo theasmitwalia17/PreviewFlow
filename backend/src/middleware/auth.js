@@ -1,9 +1,6 @@
 import jwt from "jsonwebtoken";
 import { prisma } from "../db.js";
 
-/**
- * Verify JWT, fetch user, attach full auth context (user + GitHub token)
- */
 export async function decodeAuth(req) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.split(" ")[1] : null;
@@ -16,9 +13,6 @@ export async function decodeAuth(req) {
   return { ...payload, user };
 }
 
-/**
- * Auth middleware → ensures login, attaches user + access token
- */
 export function requireAuth(req, res, next) {
   decodeAuth(req)
     .then((auth) => {

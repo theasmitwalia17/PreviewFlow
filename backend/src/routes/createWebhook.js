@@ -1,53 +1,63 @@
 import express from "express";
-import axios from "axios";
+import { requireAuth } from "../middleware/auth.js";
+import { getTierLimits } from "../middleware/tierLimits.js";
 import { prisma } from "../db.js";
-import { requireSubscription } from "../middleware/subscription.js";
+import crypto from "crypto";
+import axios from "axios";
 
 const router = express.Router();
 
-router.post("/create-webhook", requireSubscription, async (req, res) => {
+router.post("/create-webhook", requireAuth, async (req, res) => {
   try {
-    const { tier, userId, accessToken } = req.sub;
     const { projectId } = req.body;
+    const tier = req.auth.user.tier;
+    const limits = getTierLimits(tier);
 
-    if (!projectId) return res.status(400).json({ error: "Missing projectId" });
-
-    if (tier !== "PRO" && tier !== "ENTERPRISE") {
+    if (!limits.allowWebhooks) {
       return res.status(403).json({
-        error: "Tier " + tier + " is not allowed to create webhooks (requires PRO or ENTERPRISE)",
-        tier
+        error: "webhook_not_allowed",
+        message: `GitHub webhooks are only available on PRO and ENTERPRISE plans.`,
       });
     }
 
-    const project = await prisma.project.findFirst({
-      where: { id: projectId, userId }
-    });
-    if (!project) return res.status(404).json({ error: "Project not found or not yours" });
+    const project = await prisma.project.findUnique({ where: { id: projectId } });
+    if (!project || project.userId !== req.auth.user.id) {
+      return res.status(404).json({ error: "project_not_found" });
+    }
 
-    const webhookUrl = `${process.env.PUBLIC_WEBHOOK_URL}/webhooks/github`;
+    const webhookUrl = process.env.APP_BASE_URL + `/api/github/webhook`;
+    const githubApiUrl = `https://api.github.com/repos/${project.repoOwner}/${project.repoName}/hooks`;
 
-    await axios.post(
-      `https://api.github.com/repos/${project.repoOwner}/${project.repoName}/hooks`,
+    const ghResponse = await axios.post(
+      githubApiUrl,
       {
         name: "web",
-        active: true,
-        events: ["pull_request"],
         config: {
           url: webhookUrl,
           content_type: "json",
-          secret: project.webhookSecret
-        }
+          secret: project.webhookSecret,
+        },
+        events: ["pull_request"],
+        active: true,
       },
       {
-        headers: { Authorization: `Bearer ${accessToken}` }
+        headers: {
+          Authorization: `token ${project.accessToken}`,
+          Accept: "application/vnd.github.v3+json",
+        },
       }
     );
 
-    return res.json({ success: true, webhookUrl });
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { webhookId: ghResponse.data.id.toString() },
+    });
+
+    return res.json({ ok: true, webhook: ghResponse.data });
 
   } catch (err) {
-    console.error(err.response?.data || err);
-    return res.status(500).json({ error: "Failed to create webhook" });
+    console.error("create-webhook error:", err);
+    return res.status(500).json({ error: "internal_error" });
   }
 });
 
