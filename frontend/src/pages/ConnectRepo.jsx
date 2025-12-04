@@ -31,36 +31,51 @@ export default function ConnectRepo() {
     const token = localStorage.getItem("token");
     if (!token) return;
 
+    // 1. Initial Tier from Token
     setUserTier(getUserTier(token));
 
-    // Fetch both Repos (to list) AND Projects (to check limits)
+    const controller = new AbortController();
+
+    // 2. Fetch Repos & Projects
     Promise.all([
-      axios.get("http://localhost:4000/api/repos", { headers: { Authorization: `Bearer ${token}` } }),
-      axios.get("http://localhost:4000/api/projects", { headers: { Authorization: `Bearer ${token}` } })
+      axios.get("http://localhost:4000/api/repos", { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal }),
+      axios.get("http://localhost:4000/api/projects", { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal })
     ]).then(([reposRes, projectsRes]) => {
       setRepos(reposRes.data);
       setExistingProjects(projectsRes.data);
       setLoading(false);
     }).catch(err => {
-      console.error(err);
-      setLoading(false);
+      if (!axios.isCancel(err)) {
+        console.error(err);
+        setLoading(false);
+      }
     });
+
+    // 3. Fetch User Profile to Sync Tier (Fresh from DB)
+    axios.get("http://localhost:4000/api/user/me", {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal
+    }).then(res => {
+      if (res.data.tier) setUserTier(res.data.tier.toUpperCase());
+    }).catch(err => { 
+      if (!axios.isCancel(err)) console.error("Failed to sync tier", err); 
+    });
+
+    return () => controller.abort();
   }, []);
 
   const handleConnect = async (r) => {
     const token = localStorage.getItem("token");
     const limits = TIER_LIMITS[userTier];
 
-    // --- TIER ENFORCEMENT: PROJECT COUNT ---
     if (existingProjects.length >= limits.projects) {
-      alert(`⚠️ Project Limit Reached!\n\nThe ${userTier} tier allows only ${limits.projects} connected projects. Please upgrade to PRO for unlimited projects.`);
+      alert(`⚠️ Project Limit Reached!\n\nThe ${userTier} tier allows only ${limits.projects} connected projects.`);
       return;
     }
 
     setConnectingId(r.fullName);
 
     try {
-      // 1. Connect Repo
       const res = await axios.post("http://localhost:4000/api/connect-repo", {
         repoOwner: r.owner,
         repoName: r.name
@@ -68,15 +83,13 @@ export default function ConnectRepo() {
 
       const projectId = res.data.project.id;
 
-      // 2. Create Webhook (GATED)
-      // Only call if tier allows it
       if (limits.allowWebhook) {
         await axios.post("http://localhost:4000/api/create-webhook", { projectId }, {
           headers: { Authorization: `Bearer ${token}` }
         });
       }
 
-      alert(`✅ ${r.name} Connected! ${!limits.allowWebhook ? '\n(Auto-deploy disabled on ' + userTier + ' tier)' : ''}`);
+      alert(`✅ ${r.name} Connected!`);
       navigate("/");
 
     } catch (err) {
@@ -107,7 +120,6 @@ export default function ConnectRepo() {
               <div className="w-12 h-12 bg-white border border-gray-200 rounded-xl shadow-sm flex items-center justify-center mx-auto mb-4"><Layout className="w-6 h-6 text-black" /></div>
               <h1 className="text-3xl font-bold tracking-tight text-gray-900 mb-2">Import a Repository</h1>
               
-              {/* TIER USAGE INDICATOR */}
               <div className="flex items-center justify-center gap-2 mt-3">
                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase border bg-gray-100 text-gray-600 border-gray-200`}>
                   {userTier} PLAN
@@ -118,7 +130,6 @@ export default function ConnectRepo() {
               </div>
             </div>
 
-            {/* UPGRADE BANNER */}
             {isLimitReached && (
               <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between shadow-sm animate-in slide-in-from-top-2">
                 <div className="flex items-center gap-3">
@@ -148,7 +159,6 @@ export default function ConnectRepo() {
               {filteredRepos.map((r) => {
                 const isConnecting = connectingId === r.fullName;
                 const isAlreadyConnected = existingProjects.some(p => p.repoName === r.name && p.repoOwner === r.owner);
-                // Disable button if: connecting OR (limit reached AND not already connected)
                 const isDisabled = isConnecting || (isLimitReached && !isAlreadyConnected);
 
                 return (
@@ -182,7 +192,6 @@ export default function ConnectRepo() {
           )}
         </div>
         
-        {/* Helper Footer for Free Tier */}
         {!limits.allowWebhook && (
           <div className="shrink-0 text-center pb-2 flex items-center justify-center gap-2 text-xs text-amber-600">
              <Zap size={12} className="fill-amber-600" />

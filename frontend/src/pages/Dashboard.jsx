@@ -6,7 +6,7 @@ import Logs from "./Logs";
 
 import {
   GitPullRequest, RefreshCw, Trash2, ExternalLink, CheckCircle2, XCircle, Clock, Terminal, Loader2,
-  AlertCircle, ArrowRight, Globe, Ban, Archive, Layout, PlusCircle, Github, Zap, Lock, Crown, AlertTriangle, X
+  AlertCircle, ArrowRight, Globe, Ban, Archive, Layout, PlusCircle, Github, Zap, Lock, Crown, AlertTriangle, X, CheckCircle
 } from "lucide-react";
 
 // --- TIER CONFIGURATION ---
@@ -35,7 +35,7 @@ const socket = io("http://localhost:4000", { transports: ["websocket"] });
 function formatDuration(seconds) { 
   if (!seconds && seconds !== 0) return ""; 
   const numSeconds = parseFloat(seconds); 
-  if (numSeconds < 60) return `${numSeconds.toFixed(0)}s`; // Removed decimals for cleaner look
+  if (numSeconds < 60) return `${numSeconds.toFixed(0)}s`; 
   const m = Math.floor(numSeconds / 60); 
   const s = Math.floor(numSeconds % 60); 
   return `${m}m ${s}s`; 
@@ -51,33 +51,40 @@ function getStatusVisuals(status) {
   } 
 }
 
-// --- NEW COMPONENT: Live Timer ---
-// Ticks every second for active builds
+// --- COMPONENTS ---
 const LiveBuildTimer = ({ startTime }) => {
   const [elapsed, setElapsed] = useState(0);
-
   useEffect(() => {
     const start = new Date(startTime).getTime();
-    const interval = setInterval(() => {
-      setElapsed((Date.now() - start) / 1000);
-    }, 1000);
+    const interval = setInterval(() => setElapsed((Date.now() - start) / 1000), 1000);
     return () => clearInterval(interval);
   }, [startTime]);
-
   return <span>{formatDuration(elapsed)}</span>;
 };
 
-// --- NEW COMPONENT: Toast Notification ---
+// Toast Component
 const Toast = ({ message, type, onClose }) => {
   useEffect(() => {
-    const timer = setTimeout(onClose, 4000); // Auto close after 4s
+    const timer = setTimeout(onClose, 4000); 
     return () => clearTimeout(timer);
   }, [onClose]);
 
+  const styles = {
+    error: 'bg-red-50 border-red-200 text-red-800',
+    warning: 'bg-amber-50 border-amber-200 text-amber-800',
+    success: 'bg-emerald-50 border-emerald-200 text-emerald-800',
+  };
+
+  const icons = {
+    error: <AlertCircle size={18} />,
+    warning: <AlertTriangle size={18} />,
+    success: <CheckCircle size={18} />,
+  };
+
   return (
     <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-5 fade-in duration-300">
-      <div className={`flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg border ${type === 'error' ? 'bg-red-50 border-red-200 text-red-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
-        {type === 'error' ? <AlertCircle size={18} /> : <AlertTriangle size={18} />}
+      <div className={`flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg border ${styles[type] || styles.warning}`}>
+        {icons[type] || icons.warning}
         <span className="text-sm font-medium">{message}</span>
         <button onClick={onClose} className="ml-2 hover:bg-black/5 p-1 rounded-full transition-colors"><X size={14} /></button>
       </div>
@@ -91,18 +98,34 @@ export default function Dashboard() {
   const [activeLogId, setActiveLogId] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [currentTier, setCurrentTier] = useState("FREE");
-  const [toast, setToast] = useState(null); // State for Toast
+  const [toast, setToast] = useState(null);
 
   const token = localStorage.getItem("token");
   const navigate = useNavigate();
 
   useEffect(() => {
     if (!token) return;
+    
+    // 1. Initial State from Token (Fast load)
     setCurrentTier(getUserTier(token));
 
-    axios.get("http://localhost:4000/api/projects", { headers: { Authorization: `Bearer ${token}` }})
+    const controller = new AbortController();
+
+    // 2. Fetch Projects
+    axios.get("http://localhost:4000/api/projects", { 
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal
+    })
       .then((res) => setProjects(res.data))
-      .catch((err) => console.error(err));
+      .catch((err) => { if (!axios.isCancel(err)) console.error(err); });
+
+    // 3. Fetch User Profile to Sync Tier on Load
+    axios.get("http://localhost:4000/api/user/me", {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal
+    }).then(res => {
+      if (res.data.tier) setCurrentTier(res.data.tier.toUpperCase());
+    }).catch(err => { if (!axios.isCancel(err)) console.error("Failed to sync tier", err); });
 
     const handleStatusUpdate = (update) => {
       setProjects((old) => old.map((project) => {
@@ -113,10 +136,12 @@ export default function Dashboard() {
     };
 
     socket.on("preview-status-update", handleStatusUpdate);
-    return () => socket.off("preview-status-update", handleStatusUpdate);
+    return () => {
+      socket.off("preview-status-update", handleStatusUpdate);
+      controller.abort();
+    };
   }, [token]);
 
-  // Quota Calculation
   const activeBuildsCount = projects.reduce((acc, proj) => 
     acc + proj.previews.filter(p => p.status === 'building').length, 0
   );
@@ -124,7 +149,6 @@ export default function Dashboard() {
   const tierConfig = TIER_CONFIG[currentTier] || TIER_CONFIG.FREE;
 
   const rebuild = async (pre) => {
-    // 1. IMPROVEMENT: Use Toast instead of Alert/Banner
     if (activeBuildsCount >= tierConfig.concurrentBuilds) {
       setToast({ 
         type: 'warning', 
@@ -151,7 +175,6 @@ export default function Dashboard() {
     <div className="min-h-screen bg-[#fafafa] text-gray-900 font-sans p-8 md:p-12 relative overflow-x-hidden">
       <div className="absolute inset-0 z-0 opacity-[0.4] pointer-events-none" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '24px 24px' }}></div>
 
-      {/* Toast Notification Container */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
       <div className="max-w-7xl mx-auto relative z-10">
@@ -168,6 +191,13 @@ export default function Dashboard() {
                     {currentTier === 'PRO' || currentTier === 'ENTERPRISE' ? <Crown size={10} /> : <Lock size={10} />}
                     {tierConfig.label}
                   </span>
+                  
+                  {/* Tier Info Helper Text */}
+                  {['FREE', 'HOBBY'].includes(currentTier) && (
+                    <span className="text-[10px] text-gray-400 hidden lg:inline-block ml-2 border-l border-gray-200 pl-2">
+                      Live logs disabled on {currentTier} plan
+                    </span>
+                  )}
                 </div>
               </div>
            </div>
@@ -197,10 +227,8 @@ export default function Dashboard() {
                     const isBuilding = pre.status === "building";
                     const showTime = !isDeleted && pre.status !== 'queued';
 
-                    // Time Display Logic
                     let timeDisplay = null;
                     if (isBuilding) {
-                      // 2. IMPROVEMENT: Live Ticking Timer
                       timeDisplay = <span className="text-amber-600 animate-pulse"><LiveBuildTimer startTime={pre.buildStartedAt} /></span>;
                     } else if (pre.buildCompletedAt && pre.buildStartedAt) {
                       const diff = (new Date(pre.buildCompletedAt) - new Date(pre.buildStartedAt)) / 1000;
@@ -211,8 +239,6 @@ export default function Dashboard() {
 
                     return (
                       <div key={pre.id} className={`group relative border rounded-2xl shadow-sm transition-all duration-300 ease-out flex flex-col overflow-hidden h-[280px] ${statusStyle.border} ${statusStyle.ring} ${!isDeleted && !isBuilding ? 'hover:shadow-xl hover:-translate-y-1' : ''}`}>
-                        
-                        {/* 3. IMPROVEMENT: Indeterminate Progress Bar */}
                         {isBuilding && (
                           <div className="absolute bottom-0 left-0 w-full h-1 bg-amber-100 overflow-hidden z-20">
                             <div className="h-full bg-amber-400 animate-progress-indeterminate origin-left"></div>
@@ -263,7 +289,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Modals & Panels */}
       <div className={`fixed inset-0 bg-black/20 backdrop-blur-[2px] z-40 transition-opacity duration-300 ${activeLogId ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`} onClick={() => setActiveLogId(null)} />
       <div className={`fixed top-0 right-0 h-full w-full md:w-[650px] lg:w-[900px] bg-[#09090b] shadow-2xl z-50 transform transition-transform duration-300 ease-[cubic-bezier(0.25,1,0.5,1)] ${activeLogId ? "translate-x-0" : "translate-x-full"}`}>
         {activeLogId && <Logs previewId={activeLogId} onClose={() => setActiveLogId(null)} />}

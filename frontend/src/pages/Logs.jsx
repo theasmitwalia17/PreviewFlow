@@ -13,40 +13,23 @@ const getUserTier = (token) => {
 
 const ALLOW_SOCKET_TIERS = ['PRO', 'ENTERPRISE'];
 
-// --- VISUAL HELPERS ---
-
-/**
- * FIXED: XSS Vulnerability
- * - Previous: part.includes("http") -> Vulnerable to "javascript:alert('http')"
- * - Current: Strict check for http:// or https:// at start of string
- */
 const highlightKeywords = (text) => {
   if (!text) return "";
   const parts = text.split(/(\s+)/);
   return parts.map((part, i) => {
-    // Timings
     if (part.match(/^[0-9.]+s$/)) return <span key={i} className="text-yellow-400 font-bold">{part}</span>;
     
-    // URLs - Strict Security Check
     if (part.startsWith("http://") || part.startsWith("https://")) {
       return (
-        <a 
-          key={i} 
-          href={part} 
-          target="_blank" 
-          rel="noopener noreferrer" // Security best practice
-          className="text-blue-400 underline decoration-blue-400/30 hover:text-blue-300"
-        >
+        <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-400 underline decoration-blue-400/30 hover:text-blue-300">
           {part}
         </a>
       );
     }
 
-    // Keywords
     if (part === "npm") return <span key={i} className="text-red-400 font-semibold">{part}</span>;
     if (["install", "run", "build", "dev"].includes(part)) return <span key={i} className="text-cyan-400">{part}</span>;
     if (part.startsWith("sha256:")) return <span key={i} className="text-purple-400">{part.substring(0, 12)}...</span>;
-    
     return part;
   });
 };
@@ -100,37 +83,36 @@ export default function Logs({ previewId, onClose }) {
   const [status, setStatus] = useState("loading");
   const [autoScroll, setAutoScroll] = useState(true);
   const [userTier, setUserTier] = useState("FREE");
-  const [error, setError] = useState(null); // Local error boundary state
+  const [error, setError] = useState(null);
   
   const socketRef = useRef(null);
-  const isMounted = useRef(true); // Track mount state
+  const isMounted = useRef(true);
   const token = localStorage.getItem("token");
   const navigate = useNavigate();
   const logContainerRef = useRef(null);
 
-  // Track mount status to prevent memory leaks
   useEffect(() => {
     isMounted.current = true;
     return () => { isMounted.current = false; };
   }, []);
 
-  // --- API LOGS FETCHING ---
   useEffect(() => {
     if (!token) { if (!isEmbedded) navigate("/"); return; }
     
+    // Initial Tier from Token
     const tier = getUserTier(token);
     if(isMounted.current) setUserTier(tier);
 
-    // FIXED: Race Condition using AbortController
     const controller = new AbortController();
 
     setLogs(""); 
     setStatus("loading");
     setError(null);
 
+    // Fetch Logs
     axios.get(`http://localhost:4000/api/preview/${id}/logs`, { 
       headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal // Bind signal
+      signal: controller.signal
     })
       .then((res) => { 
         if (isMounted.current) {
@@ -139,7 +121,7 @@ export default function Logs({ previewId, onClose }) {
         }
       })
       .catch((err) => { 
-        if (axios.isCancel(err)) return; // Ignore cancelled requests
+        if (axios.isCancel(err)) return;
         console.error(err); 
         if (isMounted.current) {
           setLogs((prev) => prev + "\n[Error fetching saved logs]"); 
@@ -147,19 +129,24 @@ export default function Logs({ previewId, onClose }) {
         }
       });
 
-    return () => {
-      controller.abort(); // Cancel request on cleanup
-    };
+    // Sync Tier from API
+    axios.get("http://localhost:4000/api/user/me", {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal
+    }).then(res => {
+      if (isMounted.current && res.data.tier) setUserTier(res.data.tier.toUpperCase());
+    }).catch(err => { 
+      if (!axios.isCancel(err)) console.error("Failed to sync tier", err); 
+    });
+
+    return () => controller.abort();
   }, [id, token, navigate, isEmbedded]);
 
-  // --- SOCKET CONNECTION ---
   useEffect(() => {
     if (!token) return;
     
-    const tier = getUserTier(token);
-    if (!ALLOW_SOCKET_TIERS.includes(tier)) {
-      return; 
-    }
+    // Use the State tier, not the token tier, to allow live update
+    if (!ALLOW_SOCKET_TIERS.includes(userTier)) return;
 
     const socket = io("http://localhost:4000", { transports: ["websocket"], withCredentials: true });
     socketRef.current = socket;
@@ -180,10 +167,8 @@ export default function Logs({ previewId, onClose }) {
        if(isMounted.current) setLogs((prev) => prev + `\n\n=== BUILD ERROR: ${message} ===\n`);
     });
 
-    return () => {
-      socket.disconnect(); // Clean up socket connection
-    };
-  }, [id, token, autoScroll]);
+    return () => socket.disconnect();
+  }, [id, token, autoScroll, userTier]); // Added userTier dependency
 
   const scrollToBottom = () => { if (logContainerRef.current) logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight; };
   useEffect(() => { scrollToBottom(); }, [logs]);
@@ -194,7 +179,6 @@ export default function Logs({ previewId, onClose }) {
       setAutoScroll(isAtBottom);
   }
 
-  // FIXED: Error Boundary Logic inside useMemo
   const logLines = useMemo(() => {
     try {
       return logs.split("\n").map((line, index) => parseLogLine(line, index));
