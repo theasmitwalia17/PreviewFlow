@@ -2,11 +2,12 @@ import React, { useEffect, useState, useRef } from "react";
 import axios from "axios";
 import io from "socket.io-client";
 import { useNavigate } from "react-router-dom";
-import Logs from "./Logs"; 
+import Logs from "./Logs.jsx"; 
+import PlanChangeModal from "../components/PlanChangeModal.jsx"; 
 
 import {
   GitPullRequest, RefreshCw, Trash2, ExternalLink, CheckCircle2, XCircle, Clock, Terminal, Loader2,
-  AlertCircle, ArrowRight, Globe, Ban, Archive, Layout, PlusCircle, Github, Zap, Lock, Crown, AlertTriangle, X, CheckCircle
+  AlertCircle, ArrowRight, Globe, Ban, Archive, Layout, PlusCircle, Github, Zap, Lock, Crown, AlertTriangle, X, CheckCircle, Settings
 } from "lucide-react";
 
 // --- TIER CONFIGURATION ---
@@ -99,33 +100,34 @@ export default function Dashboard() {
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [currentTier, setCurrentTier] = useState("FREE");
   const [toast, setToast] = useState(null);
+  const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
 
   const token = localStorage.getItem("token");
   const navigate = useNavigate();
 
+  // Function to refresh data after plan change
+  const refreshData = async () => {
+    if (!token) return;
+    try {
+      const [projRes, userRes] = await Promise.all([
+        axios.get("http://localhost:4000/api/projects", { headers: { Authorization: `Bearer ${token}` } }),
+        axios.get("http://localhost:4000/api/user/me", { headers: { Authorization: `Bearer ${token}` } })
+      ]);
+      setProjects(projRes.data);
+      if (userRes.data.tier) setCurrentTier(userRes.data.tier.toUpperCase());
+    } catch (err) {
+      console.error("Failed to refresh data", err);
+    }
+  };
+
   useEffect(() => {
     if (!token) return;
     
-    // 1. Initial State from Token (Fast load)
+    // 1. Initial State
     setCurrentTier(getUserTier(token));
+    refreshData();
 
     const controller = new AbortController();
-
-    // 2. Fetch Projects
-    axios.get("http://localhost:4000/api/projects", { 
-      headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal
-    })
-      .then((res) => setProjects(res.data))
-      .catch((err) => { if (!axios.isCancel(err)) console.error(err); });
-
-    // 3. Fetch User Profile to Sync Tier on Load
-    axios.get("http://localhost:4000/api/user/me", {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal
-    }).then(res => {
-      if (res.data.tier) setCurrentTier(res.data.tier.toUpperCase());
-    }).catch(err => { if (!axios.isCancel(err)) console.error("Failed to sync tier", err); });
 
     const handleStatusUpdate = (update) => {
       setProjects((old) => old.map((project) => {
@@ -177,6 +179,14 @@ export default function Dashboard() {
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
+      <PlanChangeModal 
+        isOpen={isPlanModalOpen} 
+        onClose={() => setIsPlanModalOpen(false)}
+        currentTier={currentTier}
+        onPlanChanged={refreshData}
+        showToast={(msg, type) => setToast({ message: msg, type })}
+      />
+
       <div className="max-w-7xl mx-auto relative z-10">
         
         {/* Header */}
@@ -192,12 +202,13 @@ export default function Dashboard() {
                     {tierConfig.label}
                   </span>
                   
-                  {/* Tier Info Helper Text */}
-                  {['FREE', 'HOBBY'].includes(currentTier) && (
-                    <span className="text-[10px] text-gray-400 hidden lg:inline-block ml-2 border-l border-gray-200 pl-2">
-                      Live logs disabled on {currentTier} plan
-                    </span>
-                  )}
+                  {/* Change Plan Button */}
+                  <button 
+                    onClick={() => setIsPlanModalOpen(true)}
+                    className="ml-2 px-2 py-0.5 text-[10px] font-medium bg-white border border-gray-200 rounded hover:bg-gray-50 hover:text-black text-gray-500 transition-colors flex items-center gap-1"
+                  >
+                    <Settings size={10} /> Change Plan
+                  </button>
                 </div>
               </div>
            </div>
