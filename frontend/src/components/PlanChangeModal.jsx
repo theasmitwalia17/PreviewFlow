@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { 
-  Check, AlertTriangle, Loader2, X, Shield, Trash2, Box 
+  Check, AlertTriangle, Loader2, X, Shield, ArrowRight, Trash2, Box 
 } from "lucide-react";
 
 const TIERS = [
@@ -16,12 +16,16 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState('SELECT'); // SELECT | CONFIRM
   const [cleanupData, setCleanupData] = useState(null);
+  
+  // 1. New State for scoping fix
+  const [needsCleanupFlag, setNeedsCleanupFlag] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setSelectedTier(currentTier);
       setStep('SELECT');
       setCleanupData(null);
+      setNeedsCleanupFlag(false); // Reset flag on open
     }
   }, [isOpen, currentTier]);
 
@@ -42,6 +46,8 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
       const { needsCleanup, changed, willDeleteProjects, willDeletePreviews } = res.data;
 
       if (needsCleanup) {
+        // 2. Store the flag
+        setNeedsCleanupFlag(true);
         setCleanupData({ projects: willDeleteProjects, previews: willDeletePreviews });
         setStep('CONFIRM');
         setLoading(false);
@@ -49,6 +55,8 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
       }
 
       if (changed) {
+        // 3. Reset flag on success
+        setNeedsCleanupFlag(false);
         onPlanChanged(); // Refresh dashboard
         showToast('Plan changed successfully', 'success');
         onClose();
@@ -58,11 +66,8 @@ export default function PlanChangeModal({ isOpen, onClose, currentTier, onPlanCh
       console.error(err);
       showToast('Something went wrong', 'error');
     } finally {
-      // Only stop loading if we are NOT moving to the confirm step
-      // If we move to confirm, we want to keep the flow active/controlled, 
-      // though typically we'd reset loading to let them click the next button.
-      // Here we reset loading so the UI becomes interactive for the next step.
-      if (!needsCleanup || confirmCleanup) {
+      // 4. Corrected logic using state variable
+      if (!needsCleanupFlag || confirmCleanup) {
         setLoading(false);
       } else {
         setLoading(false);
