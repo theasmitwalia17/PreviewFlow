@@ -5,45 +5,82 @@ import ConnectRepo from "./pages/ConnectRepo.jsx";
 import AuthSuccess from "./pages/AuthSuccess.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Logs from "./pages/Logs.jsx";
-import LandingPage from "./pages/LandingPage.jsx"; // New Import
+import LandingPage from "./pages/LandingPage.jsx";
+import Pricing from "./pages/Pricing.jsx";
 
-const App = () => {
-  const token = localStorage.getItem("token");
+import { AuthProvider, useAuth } from "./context/AuthContext.jsx";
+
+function ProtectedRoute({ children }) {
+  const { token, loading } = useAuth();
+
+  if (loading) return <div>Loading...</div>;
+
+  return token ? children : <Navigate to="/" replace />;
+}
+
+function AppRoutes() {
+  const { token } = useAuth();
 
   return (
-    <BrowserRouter>
-      <Routes>
+    <Routes>
 
-        {/* OAuth redirect page */}
-        <Route path="/auth/success" element={<AuthSuccess />} />
+      {/* OAuth callback → saves token → redirects */}
+      <Route path="/auth/success" element={<AuthSuccess />} />
 
-        {/* Dashboard (Homepage) or Landing Page */}
-        <Route
-          path="/"
-          element={
-            token ? <Dashboard /> : <LandingPage />
-          }
-        />
+      {/* Public Landing */}
+      <Route
+        path="/"
+        element={<LandingPage />}
+      />
 
-        {/* Connect repo page */}
-        <Route
-          path="/connect"
-          element={
-            token ? <ConnectRepo /> : <Navigate to="/" />
-          }
-        />
+      {/* Dashboard */}
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <Dashboard />
+          </ProtectedRoute>
+        }
+      />
 
-        {/* Logs page */}
-        <Route
-          path="/logs/:id"
-          element={
-            token ? <Logs /> : <Navigate to="/" />
-          }
-        />
+      {/* Pricing (public) */}
+      <Route path="/pricing" element={<Pricing />} />
 
-      </Routes>
-    </BrowserRouter>
+      {/* Connect Repo */}
+      <Route
+        path="/connect"
+        element={
+          <ProtectedRoute>
+            <ConnectRepo />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Logs */}
+      <Route
+        path="/logs/:id"
+        element={
+          <ProtectedRoute>
+            <Logs />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* If logged in and they try an unknown route → /dashboard */}
+      <Route
+        path="*"
+        element={token ? <Navigate to="/dashboard" replace /> : <Navigate to="/" replace />}
+      />
+    </Routes>
   );
-};
+}
 
-export default App;
+export default function App() {
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <AppRoutes />
+      </BrowserRouter>
+    </AuthProvider>
+  );
+}
